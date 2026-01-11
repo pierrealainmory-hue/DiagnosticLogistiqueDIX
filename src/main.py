@@ -20,12 +20,10 @@ supabase = init_connection()
 
 # --- FONCTIONS UTILITAIRES ---
 def get_random_color(seed_str):
-    """Génère une couleur unique et fixe pour chaque producteur"""
     random.seed(seed_str)
-    return [random.randint(50, 255), random.randint(50, 255), random.randint(50, 255), 200]
+    return [random.randint(50, 200), random.randint(50, 200), random.randint(50, 200), 200]
 
 def load_data():
-    """Charge et nettoie les données brutes"""
     try:
         response = supabase.table("tournees").select("*").execute()
         raw_data = response.data
@@ -35,17 +33,16 @@ def load_data():
         st.error(f"Erreur de connexion : {e}")
         return None
 
-# --- 1. CHARGEMENT ET PREPARATION ---
+# --- CHARGEMENT ---
 st.title("🗺️ Diagnostic Logistique Territorial")
-st.markdown("**Visualisation des flux et potentiels de mutualisation**")
 
 raw_rows = load_data()
 
 if not raw_rows:
-    st.warning("Aucune donnée disponible pour le moment.")
+    st.warning("Aucune donnée disponible.")
     st.stop()
 
-# Transformation des données
+# --- PREPARATION DES DONNEES ---
 all_tours = []
 all_paths = [] 
 all_points = [] 
@@ -59,7 +56,11 @@ for row in raw_rows:
         try: content = json.loads(content)
         except: content = {}
     
-    depot_coords = content.get("depot", {}).get("pData", {})
+    # Infos Dépôt
+    depot_data = content.get("depot", {})
+    depot_coords = depot_data.get("pData", {})
+    vehicle_type = depot_data.get("veh", {}).get("type", "Non précisé")
+    
     depot_lat = depot_coords.get("lat")
     depot_lon = depot_coords.get("lon")
     
@@ -71,32 +72,35 @@ for row in raw_rows:
         stops = t.get("stops", [])
         stats = t.get("stats", {})
         
+        # On ajoute le type de véhicule aux données
         all_tours.append({
             "Producteur": prod_name,
             "Jour": day,
             "Tournée": tour_name,
+            "Véhicule": vehicle_type,
             "Coût": float(stats.get("cost", 0)),
             "Distance": float(stats.get("dist", 0)),
             "Volume (kg)": sum([float(s.get("vol", 0)) for s in stops]),
-            "Nb Arrêts": len(stops),
-            "Vehicule": content.get("depot", {}).get("veh", {}).get("type", "?")
+            "Nb Arrêts": len(stops)
         })
 
+        # Construction Géographique (seulement si coordonnées valides)
         if depot_lat and depot_lon:
             path_coords = [[depot_lon, depot_lat]] 
             
-            # Dépôt
+            # Point Dépôt
             all_points.append({
-                "name": f"Dépôt: {prod_name}",
+                "name": f"DEPOT: {prod_name}",
                 "coordinates": [depot_lon, depot_lat],
-                "color": [0, 0, 0, 255], 
-                "radius": 200,
+                "color": [30, 30, 30, 255], # Presque noir
+                "radius": 250,
                 "type": "Depot",
                 "prod": prod_name,
-                "day": day
+                "day": day,
+                "veh": vehicle_type
             })
 
-            # Arrêts
+            # Points Arrêts
             for s in stops:
                 if s.get("lat") and s.get("lon"):
                     coord = [s.get("lon"), s.get("lat")]
@@ -106,107 +110,155 @@ for row in raw_rows:
                         "name": f"{s.get('client')} ({prod_name})",
                         "coordinates": coord,
                         "color": prod_color,
-                        "radius": 100,
+                        "radius": 120,
                         "type": "Livraison",
                         "prod": prod_name,
-                        "day": day
+                        "day": day,
+                        "veh": vehicle_type
                     })
             
+            # Fermeture de la boucle
             path_coords.append([depot_lon, depot_lat])
 
             all_paths.append({
                 "path": path_coords,
                 "color": prod_color,
-                "name": f"{prod_name} - {day}",
+                "name": f"{prod_name} ({day})",
                 "prod": prod_name,
-                "day": day
+                "day": day,
+                "veh": vehicle_type
             })
 
 df = pd.DataFrame(all_tours)
 
-# --- 2. FILTRES LATERAUX ---
-st.sidebar.header("🔍 Filtres d'Analyse")
-
-days_avail = df["Jour"].unique() if not df.empty else []
-selected_days = st.sidebar.multiselect("Jours de la semaine", days_avail, default=days_avail)
-
-prods_avail = df["Producteur"].unique() if not df.empty else []
-selected_prods = st.sidebar.multiselect("Producteurs", prods_avail, default=prods_avail)
+# --- GESTION DES FILTRES (SIDEBAR AMÉLIORÉE) ---
+st.sidebar.title("🎛️ Filtres Avancés")
 
 if not df.empty:
-    df_filtered = df[df["Jour"].isin(selected_days) & df["Producteur"].isin(selected_prods)]
-    filtered_paths = [p for p in all_paths if p["day"] in selected_days and p["prod"] in selected_prods]
-    filtered_points = [p for p in all_points if p["day"] in selected_days and p["prod"] in selected_prods]
+    # 1. FILTRE PRODUCTEURS
+    prods_list = sorted(df["Producteur"].unique())
+    st.sidebar.markdown(f"**👨‍🌾 Producteurs ({len(prods_list)})**")
+    selected_prods = st.sidebar.multiselect(
+        "Sélectionner:", prods_list, default=prods_list, label_visibility="collapsed"
+    )
+    
+    st.sidebar.markdown("---")
+
+    # 2. FILTRE JOURS (Trié intelligemment)
+    week_order = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+    # On ne garde que les jours présents dans les données, mais on les trie selon l'ordre de la semaine
+    days_present = df["Jour"].unique()
+    days_sorted = sorted(days_present, key=lambda x: week_order.index(x) if x in week_order else 99)
+    
+    st.sidebar.markdown(f"**📅 Jours ({len(days_sorted)})**")
+    selected_days = st.sidebar.multiselect(
+        "Sélectionner:", days_sorted, default=days_sorted, label_visibility="collapsed"
+    )
+
+    st.sidebar.markdown("---")
+
+    # 3. FILTRE VÉHICULES (Nouveau)
+    veh_list = sorted(df["Véhicule"].unique())
+    st.sidebar.markdown(f"**🚚 Flotte Véhicules ({len(veh_list)})**")
+    selected_vehs = st.sidebar.multiselect(
+        "Type de véhicule:", veh_list, default=veh_list, label_visibility="collapsed"
+    )
+
+    # --- APPLICATION DES FILTRES ---
+    # Masque booléen global
+    mask = (
+        df["Producteur"].isin(selected_prods) & 
+        df["Jour"].isin(selected_days) & 
+        df["Véhicule"].isin(selected_vehs)
+    )
+    df_filtered = df[mask]
+    
+    # Filtrage des listes cartographiques
+    filtered_paths = [
+        p for p in all_paths 
+        if p["prod"] in selected_prods and p["day"] in selected_days and p["veh"] in selected_vehs
+    ]
+    filtered_points = [
+        p for p in all_points 
+        if p["prod"] in selected_prods and p["day"] in selected_days and p["veh"] in selected_vehs
+    ]
+
 else:
     df_filtered = df
     filtered_paths = []
     filtered_points = []
 
-# --- 3. KPIs ---
-st.subheader("📊 Indicateurs de Performance Territoriale")
-
+# --- KPI STRATEGIQUES ---
 if not df_filtered.empty:
+    st.markdown("### 📊 Performance de la sélection")
+    
     total_km = df_filtered["Distance"].sum()
     total_stops = df_filtered["Nb Arrêts"].sum()
     total_vol = df_filtered["Volume (kg)"].sum()
+    # Coût moyen pondéré
     total_cost = df_filtered["Coût"].sum()
     
     kpi_density = total_km / total_stops if total_stops > 0 else 0
-    kpi_unit_cost = total_cost / total_vol if total_vol > 0 else 0
+    kpi_unit = total_cost / total_vol if total_vol > 0 else 0
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Flux Totaux", f"{total_km:.0f} km", help="Cumul des distances")
-    c2.metric("Points Livrés", f"{total_stops}", help="Nombre total d'arrêts")
-    c3.metric("Densité Logistique", f"{kpi_density:.1f} km/arrêt", delta_color="inverse", help="Km moyen entre deux arrêts")
-    c4.metric("Coût Unitaire", f"{kpi_unit_cost:.2f} €/kg", delta_color="inverse", help="Coût de transport par kg")
+    c1.metric("Flux Cumulés", f"{total_km:,.0f} km")
+    c2.metric("Arrêts Desservis", f"{total_stops}")
+    c3.metric("Densité (Km/Arrêt)", f"{kpi_density:.1f} km", delta_color="inverse")
+    c4.metric("Coût Unitaire", f"{kpi_unit:.2f} €/kg", delta_color="inverse")
 
-    # --- 4. LA CARTE (CORRIGÉE AVEC FOND CARTO) ---
-    st.subheader(f"📍 Carte des Flux ({len(selected_prods)} producteurs)")
-
+    # --- CARTE INTERACTIVE ---
+    st.markdown("### 📍 Visualisation des Flux")
+    
     if filtered_paths:
-        init_lat = filtered_points[0]["coordinates"][1] if filtered_points else 43.7
-        init_lon = filtered_points[0]["coordinates"][0] if filtered_points else 6.5
-
-        view_state = pdk.ViewState(latitude=init_lat, longitude=init_lon, zoom=9, pitch=0)
+        # Centrage automatique
+        init_lat = filtered_points[0]["coordinates"][1]
+        init_lon = filtered_points[0]["coordinates"][0]
+        
+        view_state = pdk.ViewState(latitude=init_lat, longitude=init_lon, zoom=10)
 
         layer_paths = pdk.Layer(
             "PathLayer",
             filtered_paths,
-            pickable=True,
             get_color="color",
             width_scale=20,
-            width_min_pixels=2,
+            width_min_pixels=3,
             get_path="path",
-            get_width=5
+            get_width=5,
+            pickable=True
         )
 
         layer_points = pdk.Layer(
             "ScatterplotLayer",
             filtered_points,
-            pickable=True,
             get_position="coordinates",
             get_color="color",
             get_radius="radius",
-            radius_min_pixels=4,
-            radius_max_pixels=10
+            radius_min_pixels=5,
+            radius_max_pixels=15,
+            pickable=True
         )
 
         r = pdk.Deck(
             layers=[layer_paths, layer_points],
             initial_view_state=view_state,
-            tooltip={"text": "{name}\nProducteur: {prod}"},
-            # C'EST ICI QUE CA CHANGE : Utilisation d'un style CartoDB gratuit
+            tooltip={"text": "{name}\nProducteur: {prod}\nVéhicule: {veh}"},
             map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
         )
         st.pydeck_chart(r)
-        
-        st.caption("ℹ️ Les lignes représentent les flux théoriques. Chaque couleur est un producteur.")
-
     else:
-        st.info("Sélectionnez des jours/producteurs pour voir la carte.")
+        st.info("La sélection est vide. Ajustez les filtres.")
 
-    with st.expander("Voir le détail des tournées"):
-        st.dataframe(df_filtered)
+    # --- TABLEAU DETAILLE ---
+    st.markdown("### 📋 Détail Chiffré")
+    st.dataframe(
+        df_filtered.style.format({
+            "Coût": "{:.2f} €",
+            "Distance": "{:.1f} km",
+            "Volume (kg)": "{:.0f} kg"
+        }), 
+        use_container_width=True
+    )
 
 else:
-    st.info("Aucune donnée ne correspond aux filtres.")
+    st.warning("Aucune donnée ne correspond à vos filtres actuels.")
