@@ -41,7 +41,6 @@ for entry in raw_data:
         prod_name = entry.get("nom_producteur", "Inconnu")
         date_envoi = entry.get("created_at", "")[:10]
         
-        # --- CORRECTION BLINDÉE ICI ---
         # On récupère le contenu
         content = entry.get("data_json", {})
         
@@ -50,7 +49,7 @@ for entry in raw_data:
             try:
                 content = json.loads(content)
             except:
-                content = {} # Si ça échoue, on met vide pour ne pas planter
+                content = {} 
         
         # On récupère les tournées
         tours = content.get("tours", [])
@@ -73,8 +72,6 @@ for entry in raw_data:
             all_rows.append(row)
             
     except Exception as e:
-        # En cas d'erreur sur une ligne, on continue les autres
-        print(f"Erreur sur une ligne : {e}")
         continue
 
 # --- 4. AFFICHAGE ---
