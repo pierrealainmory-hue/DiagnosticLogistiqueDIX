@@ -1,90 +1,112 @@
 import streamlit as st
 import pandas as pd
-import os
-import plotly.express as px
+import json
+from supabase import create_client, Client
 
-# 1. CONFIGURATION DE LA PAGE
-st.set_page_config(page_title="Logistique DIX - Analyse", layout="wide")
+# --- 1. CONFIGURATION ---
+st.set_page_config(page_title="Logistique DIX - PNR", layout="wide")
 
-st.title("🚛 Diagnostic Logistique DIX")
+# VOS CLES SUPABASE
+SUPABASE_URL = "https://lxoqhmfpnodyfnavmhmn.supabase.co"
+SUPABASE_KEY = "sb_publishable_-LPq5CilDsNJcBuOKSG_hw_2nZUZrYg"
+
+# Connexion
+@st.cache_resource
+def init_connection():
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+supabase = init_connection()
+
+st.title("🚛 Tableau de Bord - PNR Préalpes d'Azur")
 st.markdown("---")
 
-# 2. GESTION DU FICHIER LOCAL
-DATA_DIR = "data"
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
-
-# 3. BARRE LATÉRALE : IMPORTATION
-with st.sidebar:
-    st.header("1. Importation")
-    uploaded_file = st.file_uploader("Charger un fichier CSV", type=['csv'])
+# --- 2. RECUPERATION DES DONNEES ---
+try:
+    response = supabase.table("tournees").select("*").execute()
+    raw_data = response.data
     
-    # Bouton de rechargement pour les tests
-    if st.button("Recharger les données"):
-        st.rerun()
+    if not raw_data:
+        st.warning("📭 La connexion fonctionne, mais la table est vide.")
+        st.stop()
+        
+except Exception as e:
+    st.error(f"❌ Erreur de connexion : {e}")
+    st.stop()
 
-# Fonction de chargement avec cache pour la rapidité
-def load_data(file_path):
+# --- 3. TRANSFORMATION (Avec sécurité JSON) ---
+all_rows = []
+
+for entry in raw_data:
     try:
-        df = pd.read_csv(file_path)
-        # Nettoyage basique si nécessaire
-        return df
+        prod_name = entry.get("nom_producteur", "Inconnu")
+        date_envoi = entry.get("created_at", "")[:10]
+        
+        # --- CORRECTION BLINDÉE ICI ---
+        # On récupère le contenu
+        content = entry.get("data_json", {})
+        
+        # Si c'est du texte (cas fréquent), on le transforme en dictionnaire
+        if isinstance(content, str):
+            try:
+                content = json.loads(content)
+            except:
+                content = {} # Si ça échoue, on met vide pour ne pas planter
+        
+        # On récupère les tournées
+        tours = content.get("tours", [])
+        
+        for t in tours:
+            stats = t.get("stats", {})
+            stops = t.get("stops", [])
+            
+            row = {
+                "Producteur": prod_name,
+                "Date Envoi": date_envoi,
+                "Nom Tournée": t.get("name", "Sans nom"),
+                "Jour": t.get("day", ""),
+                "Coût Total (€)": float(stats.get("cost", 0)),
+                "CA Tournée (€)": float(stats.get("ca", 0)),
+                "Distance (km)": float(stats.get("dist", 0)),
+                "Nb Arrêts": len(stops),
+                "Poids Total (kg)": sum([float(s.get("vol", 0)) for s in stops])
+            }
+            all_rows.append(row)
+            
     except Exception as e:
-        return None
+        # En cas d'erreur sur une ligne, on continue les autres
+        print(f"Erreur sur une ligne : {e}")
+        continue
 
-# 4. LOGIQUE PRINCIPALE
-current_file_path = os.path.join(DATA_DIR, "fichier_actuel.csv")
-
-# Si l'utilisateur vient d'uploader un fichier, on l'écrase
-if uploaded_file is not None:
-    with open(current_file_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    st.sidebar.success("Fichier mis à jour !")
-
-# Si le fichier existe sur le disque, on l'analyse
-if os.path.exists(current_file_path):
-    df = load_data(current_file_path)
+# --- 4. AFFICHAGE ---
+if all_rows:
+    df = pd.DataFrame(all_rows)
     
-    if df is not None:
-        # --- SECTION ANALYSE ---
-        
-        st.subheader("2. Vue d'ensemble")
-        
-        # Calcul des KPIs (Indicateurs Clés)
-        total_poids = df["Poids (kg)"].sum()
-        nb_tournees = df["Tournée ID"].nunique()
-        nb_clients = df["Client / Point de Livraison"].nunique()
-        
-        # Affichage des KPIs en colonnes
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Poids Total", f"{total_poids} kg")
-        col2.metric("Tournées Identifiées", nb_tournees)
-        col3.metric("Points livrés", nb_clients)
-        
-        st.markdown("---")
-        
-        # --- SECTION GRAPHIQUES ---
-        col_graph1, col_graph2 = st.columns(2)
-        
-        with col_graph1:
-            st.subheader("Répartition par Producteur (Poids)")
-            # Groupement des données
-            df_prod = df.groupby("Producteur")["Poids (kg)"].sum().reset_index()
-            # Graphique à barres interactif
-            fig_bar = px.bar(df_prod, x="Producteur", y="Poids (kg)", color="Producteur")
-            st.plotly_chart(fig_bar, use_container_width=True)
-            
-        with col_graph2:
-            st.subheader("Types d'arrêts")
-            # Camembert
-            fig_pie = px.pie(df, names="Type Arrêt", title="Distribution Livraison vs Collecte")
-            st.plotly_chart(fig_pie, use_container_width=True)
-
-        # --- SECTION DÉTAIL ---
-        with st.expander("Voir les données brutes"):
-            st.dataframe(df)
-            
-    else:
-        st.error("Erreur de lecture du fichier.")
+    # KPIs
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Producteurs Actifs", df["Producteur"].nunique())
+    col2.metric("Total Tournées", len(df))
+    col3.metric("Volume Transporté", f"{int(df['Poids Total (kg)'].sum())} kg")
+    
+    st.markdown("---")
+    
+    # Graphiques
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("Coût par Producteur")
+        st.bar_chart(df, x="Producteur", y="Coût Total (€)", color="Producteur")
+    
+    with c2:
+        st.subheader("Distance par Tournée")
+        st.bar_chart(df, x="Nom Tournée", y="Distance (km)")
+    
+    # Données brutes
+    st.subheader("Détail des réceptions")
+    st.dataframe(df)
 else:
-    st.info("👈 Veuillez charger un fichier CSV dans la barre latérale.")
+    st.info("⚠️ Les données ont été reçues mais aucune tournée valide n'a pu être extraite.")
+    with st.expander("Voir les données brutes pour débogage"):
+        st.write(raw_data)
+
+# Bouton de rechargement
+if st.button("🔄 Rafraîchir les données"):
+    st.rerun()
