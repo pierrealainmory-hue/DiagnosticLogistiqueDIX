@@ -1,0 +1,22 @@
+# --- PROTECTION DES DONNEES ---
+*.csv
+*.xlsx
+*.xls
+*.json
+*.db
+*.sqlite3
+
+# Ignorer le dossier de données mais garder la structure
+data/
+!data/.gitkeep
+
+# --- PYTHON ---
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# --- ENVIRONNEMENT ---
+.env
+.venv/
+env/
+venv/
