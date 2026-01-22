@@ -1,4 +1,3 @@
-cat > src/catl.py <<EOL
 import streamlit as st
 import pandas as pd
 import json
@@ -10,7 +9,6 @@ from supabase import create_client
 st.set_page_config(page_title="Diagnostic Logistique - CATL", layout="wide")
 
 # --- CONNEXION SUPABASE ---
-# Utilisation des mêmes clés, mais on pointera vers une autre table
 SUPABASE_URL = "https://lxoqhmfpnodyfnavmhmn.supabase.co"
 SUPABASE_KEY = "sb_publishable_-LPq5CilDsNJcBuOKSG_hw_2nZUZrYg"
 
@@ -225,5 +223,4 @@ if not df_filtered.empty:
     st.dataframe(df_filtered.style.format({"Coût": "{:.2f} €", "Distance": "{:.1f} km", "Volume (kg)": "{:.0f} kg"}), use_container_width=True)
 
 else:
-    st.warning("Aucune donnée.")
-EOL
+    st.warning("Aucune donnée pour le CATL.")
